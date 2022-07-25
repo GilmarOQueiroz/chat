@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'chat_message.dart';
+
 class ChatScreen extends StatefulWidget {
 
 
@@ -22,16 +24,19 @@ class _ChatScreenState extends State<ChatScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   User _currentUser;
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
     FirebaseAuth.instance.authStateChanges().listen((user){
-      _currentUser = user;
+      setState(() {
+        _currentUser = user;
+      });
     });
   }
 
-  Future<User> _getUser() async{
+  _getUser() async{
     if(_currentUser != null) return _currentUser;
 
     try{
@@ -41,12 +46,11 @@ class _ChatScreenState extends State<ChatScreen> {
         await googleSignInAccount.authentication;
       final AuthCredential credential = GoogleAuthProvider.credential(
         idToken: googleSignInAuthentication.idToken,
-        accessToken: googleSignInAuthentication.accessToken
+        accessToken: googleSignInAuthentication.accessToken,
       );
       final UserCredential authResult =
           await FirebaseAuth.instance.signInWithCredential(credential);
       final User user = authResult.user;
-          await FirebaseAuth.instance.signInWithCredential(credential);
           return user;
 
     }catch (error) {
@@ -58,7 +62,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final User user = await _getUser();
 
     if(user == null){
-        ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content:
             Text('Não foi possivel fazer o login. Tente novamente!'),
             backgroundColor: Colors.red,
@@ -70,13 +74,18 @@ class _ChatScreenState extends State<ChatScreen> {
       "uid": user.uid,
       "senderName": user.displayName,
       "senderPhotoUrl": user.photoURL,
+      "time" : Timestamp.now(),
     };
 
     if(imgFile != null){
       final File file = File(imgFile.path);
       UploadTask task = FirebaseStorage.instance.ref().child(
-        DateTime.now().millisecondsSinceEpoch.toString()
+        user.uid + DateTime.now().millisecondsSinceEpoch.toString()
       ).putFile(file);
+
+      setState(() {
+        _isLoading = false;
+      });
 
       TaskSnapshot taskSnapshot = await task;
       String url = await taskSnapshot.ref.getDownloadURL();
@@ -92,14 +101,35 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       key: _scaffoldKey,
       appBar: AppBar(
-        title: const Text('Olá'),
+        title: Text(
+          _currentUser != null ? 'Chat, ${_currentUser.displayName}' : 'Chat App'
+        ),
+        centerTitle: true,
         elevation: 0,
+        actions: <Widget>[
+          _currentUser != null ? IconButton( 
+              icon: Icon(Icons.exit_to_app),
+              onPressed: (){
+                FirebaseAuth.instance.signOut();
+                googleSignIn.signOut();
+                ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content:
+                    Text('Você saiu com sucesso!'),
+                    )
+                );
+              },
+          ) : Container()
+        ],
       ),
       body: Column(
         children: <Widget>[
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('Mensagens').snapshots(),
+              stream: FirebaseFirestore
+                  .instance
+                  .collection('Mensagens')
+                  .orderBy('time')
+                  .snapshots(),
               builder: (context, snapshot){
                 switch(snapshot.connectionState){
                   case ConnectionState.none:
@@ -108,14 +138,15 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: CircularProgressIndicator(),
                     );
                   default:
-                    List<DocumentSnapshot> docs =
+                    List<DocumentSnapshot> documents =
                         snapshot.data.docs.reversed.toList();
                     return ListView.builder(
-                      itemCount: docs.length,
+                      itemCount: documents.length,
                       reverse: true,
                       itemBuilder: (context, index){
-                        return ListTile(
-                          title: Text(docs[index].data()['text']),
+                        return ChatMessage(
+                            documents[index].data(),
+                            documents[index].data()['uid'] == _currentUser?.uid
                         );
                       }
                     );
@@ -123,6 +154,7 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
           ),
+          _isLoading ? LinearProgressIndicator() : Container(),
           TextComposer(_sendMessage),
         ],
       ),
